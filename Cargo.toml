@@ -1,0 +1,15 @@
+[package]
+name = "cargo-check-name"
+version = "0.1.0"
+edition = "2024"
+description = "Check whether crate names are truly available on crates.io"
+license = "MIT"
+
+[[bin]]
+name = "cargo-check-name"
+path = "src/main.rs"
+
+[dependencies]
+crates_io_validation = { git = "https://github.com/rust-lang/crates.io", default-features = false }
+clap = { version = "4", features = ["derive"] }
+ureq = "3"
