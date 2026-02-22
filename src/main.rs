@@ -3,12 +3,12 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cargo_check_name::check::{check_name, new_agent, Status};
+use cargo_avail::check::{check_name, new_agent, Status};
 
 #[derive(Parser)]
 #[command(
-    name = "cargo-check-name",
-    bin_name = "cargo check-name",
+    name = "cargo-avail",
+    bin_name = "cargo avail",
     about = "Check whether crate names are truly available on crates.io",
     after_help = "Checks name validity (character rules, length), reserved names \
                   (std, core, alloc, etc.), and the crates.io sparse index with \
@@ -30,9 +30,9 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    // cargo passes "check-name" as first arg when invoked as subcommand
+    // cargo passes "avail" as first arg when invoked as subcommand
     let args: Vec<String> = std::env::args().collect();
-    let args = if args.len() > 1 && args[1] == "check-name" {
+    let args = if args.len() > 1 && args[1] == "avail" {
         [&args[..1], &args[2..]].concat()
     } else {
         args
@@ -62,7 +62,7 @@ fn main() -> ExitCode {
 
     if names.is_empty() {
         eprintln!("error: no crate names provided");
-        eprintln!("usage: cargo check-name [OPTIONS] [NAMES...]");
+        eprintln!("usage: cargo avail [OPTIONS] [NAMES...]");
         return ExitCode::from(2);
     }
 
