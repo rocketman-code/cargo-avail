@@ -71,11 +71,23 @@ fn main() -> ExitCode {
     names.retain(|n| seen.insert(n.clone()));
 
     let agent = new_agent();
+
+    // Check all names in parallel
+    let results: Vec<(String, Status)> = std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let agent = &agent;
+                s.spawn(move || (name.clone(), check_name(agent, name)))
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
     let mut all_available = true;
 
-    for name in &names {
-        let status = check_name(&agent, name);
-        let (label, detail) = match &status {
+    for (name, status) in &results {
+        let (label, detail) = match status {
             Status::Available => ("available", String::new()),
             Status::Taken => ("taken", String::new()),
             Status::Reserved => ("reserved", String::new()),
