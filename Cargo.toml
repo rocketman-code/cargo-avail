@@ -2,14 +2,26 @@
 name = "cargo-avail"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Check whether crate names are truly available on crates.io"
 license = "MIT"
+repository = "https://github.com/rocketman-code/cargo-avail"
+homepage = "https://github.com/rocketman-code/cargo-avail"
+readme = "README.md"
+keywords = ["crate", "name", "availability", "cargo", "crates-io"]
+categories = ["development-tools::cargo-plugins"]
+exclude = [".claude/", ".github/", "docs/"]
 
 [[bin]]
 name = "cargo-avail"
 path = "src/main.rs"
 
 [dependencies]
-crates_io_validation = { git = "https://github.com/rust-lang/crates.io", default-features = false }
 clap = { version = "4", features = ["derive"] }
 ureq = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = "1"

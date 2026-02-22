@@ -1,9 +1,12 @@
+use std::fmt::Write as _;
 use std::io::{self, BufRead, IsTerminal};
 use std::process::ExitCode;
 
 use clap::Parser;
 
-use cargo_avail::check::{check_name, new_agent, Status};
+use cargo_avail::check::{
+    Availability, CheckError, Client, MAX_CONCURRENT_REQUESTS, canon_crate_name, check_name,
+};
 
 #[derive(Parser)]
 #[command(
@@ -11,10 +14,11 @@ use cargo_avail::check::{check_name, new_agent, Status};
     bin_name = "cargo avail",
     about = "Check whether crate names are truly available on crates.io",
     after_help = "Checks name validity (character rules, length), reserved names \
-                  (std, core, alloc, etc.), and the crates.io sparse index with \
-                  canonical matching (hyphens and underscores are equivalent).\n\n\
+                  (std, core, alloc, nul, com0, etc.), and the crates.io sparse index \
+                  with canonical matching (hyphens and underscores are equivalent).\n\n\
                   Cannot detect recently deleted crates (requires DB access). \
-                  A name passing all checks could still fail at publish time."
+                  A name passing all checks could still fail at publish time.",
+    allow_hyphen_values = true
 )]
 struct Cli {
     /// Crate names to check (also reads from stdin)
@@ -29,10 +33,45 @@ struct Cli {
     available_only: bool,
 }
 
+/// Sanitize a string for tab-separated output: replace control chars with escape sequences.
+fn sanitize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    // cargo passes "avail" as first arg when invoked as subcommand
+    // Reset SIGPIPE to default behavior so piping to head/grep/etc. does not panic.
+    // On Unix, the default disposition for SIGPIPE is to terminate the process.
+    // Rust's runtime sets SIG_IGN for SIGPIPE, which causes write() to return
+    // EPIPE and println!() to panic. Restoring default behavior lets the OS
+    // handle it cleanly.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
+    // Strip the subcommand name when invoked as `cargo avail`.
+    // Detect this by checking if argv[0] basename is "cargo" and argv[1] is "avail".
+    // When invoked directly as `cargo-avail avail`, argv[0] is "cargo-avail",
+    // so "avail" is a real crate name and should NOT be stripped.
     let args: Vec<String> = std::env::args().collect();
-    let args = if args.len() > 1 && args[1] == "avail" {
+    let invoked_via_cargo = args.first().is_some_and(|a| {
+        let base = a.rsplit('/').next().unwrap_or(a);
+        base == "cargo"
+    });
+    let args = if invoked_via_cargo && args.len() > 1 && args[1] == "avail" {
         [&args[..1], &args[2..]].concat()
     } else {
         args
@@ -66,48 +105,80 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Deduplicate while preserving order
+    // Deduplicate by canonical name while preserving order and original input
     let mut seen = std::collections::HashSet::new();
-    names.retain(|n| seen.insert(n.clone()));
+    names.retain(|n| seen.insert(canon_crate_name(n)));
 
-    let agent = new_agent();
+    let client = Client::new();
 
-    // Check all names in parallel
-    let results: Vec<(String, Status)> = std::thread::scope(|s| {
-        let handles: Vec<_> = names
-            .iter()
-            .map(|name| {
-                let agent = &agent;
-                s.spawn(move || (name.clone(), check_name(agent, name)))
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    });
+    // Check names in parallel, capped at MAX_CONCURRENT_REQUESTS threads
+    let mut results: Vec<(String, Result<Availability, CheckError>)> =
+        Vec::with_capacity(names.len());
+    for chunk in names.chunks(MAX_CONCURRENT_REQUESTS) {
+        let chunk_results: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|name| {
+                    let client = &client;
+                    s.spawn(move || (name.clone(), check_name(client, name)))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| {
+                        (
+                            String::from("?"),
+                            Err(CheckError::IndexLookup(Box::new(ureq::Error::Io(
+                                io::Error::other("internal thread panic"),
+                            )))),
+                        )
+                    })
+                })
+                .collect()
+        });
+        results.extend(chunk_results);
+    }
 
     let mut all_available = true;
+    let mut error_count: usize = 0;
 
-    for (name, status) in &results {
-        let (label, detail) = match status {
-            Status::Available => ("available", String::new()),
-            Status::Taken => ("taken", String::new()),
-            Status::Reserved => ("reserved", String::new()),
-            Status::Invalid(msg) => ("invalid", format!(": {msg}")),
-            Status::Unknown(msg) => ("unknown", format!(": {msg}")),
-        };
+    for (name, result) in &results {
+        let is_available = matches!(result, Ok(Availability::Available));
+        let is_error = result.is_err();
 
-        if !matches!(status, Status::Available) {
+        if !is_available {
             all_available = false;
+        }
+
+        if is_error {
+            error_count += 1;
         }
 
         if cli.quiet {
             continue;
         }
 
-        if cli.available_only && !matches!(status, Status::Available) {
+        // --available-only hides taken/reserved/invalid but always shows errors
+        // (errors mean we couldn't confirm availability -- user should know)
+        if cli.available_only && !is_available && !is_error {
             continue;
         }
 
-        println!("{name}\t{label}{detail}");
+        let status_str = match result {
+            Ok(a) => a.to_string(),
+            Err(e) => e.to_string(),
+        };
+        let sanitized_name = sanitize(name);
+        let sanitized_status = sanitize(&status_str);
+        println!("{sanitized_name}\t{sanitized_status}");
+    }
+
+    if error_count > 0 && !cli.quiet {
+        eprintln!(
+            "warning: {error_count} name{} could not be checked (network error)",
+            if error_count == 1 { "" } else { "s" }
+        );
     }
 
     if all_available {
