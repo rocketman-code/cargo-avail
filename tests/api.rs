@@ -41,7 +41,7 @@ fn client_default_equals_new() {
 }
 
 #[test]
-#[ignore] // requires network access
+#[ignore = "requires network access"]
 fn public_api_taken_returns_taken() {
     let client = Client::new();
     match check_name(&client, "serde") {
@@ -51,7 +51,7 @@ fn public_api_taken_returns_taken() {
 }
 
 #[test]
-#[ignore] // requires network access
+#[ignore = "requires network access"]
 fn public_api_available_returns_available() {
     let client = Client::new();
     match check_name(&client, "zzzyyyxxxwww-not-a-real-crate") {

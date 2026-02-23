@@ -209,6 +209,8 @@ pub enum CheckError {
     InvalidName(validation::InvalidCrateName),
     /// A network or HTTP error prevented querying the sparse index.
     IndexLookup(Box<ureq::Error>),
+    /// An internal error (e.g., thread panic) that prevented checking.
+    Internal(String),
 }
 
 impl fmt::Display for CheckError {
@@ -216,6 +218,7 @@ impl fmt::Display for CheckError {
         match self {
             Self::InvalidName(e) => write!(f, "invalid: {e}"),
             Self::IndexLookup(e) => write!(f, "unknown: {e}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
 }
@@ -225,6 +228,7 @@ impl std::error::Error for CheckError {
         match self {
             Self::InvalidName(e) => Some(e),
             Self::IndexLookup(e) => Some(e.as_ref()),
+            Self::Internal(_) => None,
         }
     }
 }
@@ -346,10 +350,10 @@ pub fn check_name(client: &Client, name: &str) -> Result<Availability, CheckErro
 
     let variants: [Option<&str>; 3] = [
         Some(lowered.as_str()),
-        if canonical != lowered {
-            Some(canonical.as_str())
-        } else {
+        if canonical == lowered {
             None
+        } else {
+            Some(canonical.as_str())
         },
         if hyphen_variant != lowered && hyphen_variant != canonical {
             Some(hyphen_variant.as_str())
@@ -363,7 +367,7 @@ pub fn check_name(client: &Client, name: &str) -> Result<Availability, CheckErro
         let url = format!("https://index.crates.io/{path}");
         match client.agent.get(&url).call() {
             Ok(_) => return Ok(Availability::Taken),
-            Err(ureq::Error::StatusCode(404)) => continue,
+            Err(ureq::Error::StatusCode(404)) => {}
             Err(e) => return Err(CheckError::IndexLookup(Box::new(e))),
         }
     }
@@ -461,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires network access; run with: cargo test -- --ignored
+    #[ignore = "requires network access; run with: cargo test -- --ignored"]
     fn taken_name() {
         let client = Client::new();
         match check_name(&client, "serde") {
@@ -471,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires network access
+    #[ignore = "requires network access"]
     fn available_name() {
         let client = Client::new();
         match check_name(&client, "zzzyyyxxxwww-not-a-real-crate") {
@@ -481,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires network access
+    #[ignore = "requires network access"]
     fn canonical_collision_detected() {
         let client = Client::new();
         match check_name(&client, "tokio_util") {
