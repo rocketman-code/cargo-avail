@@ -3,15 +3,25 @@ use std::io::{self, BufRead, IsTerminal};
 use std::process::ExitCode;
 
 use clap::Parser;
+use serde::Serialize;
 
 use cargo_avail::check::{
     Availability, CheckError, Client, MAX_CONCURRENT_REQUESTS, canon_crate_name, check_name,
 };
 
+#[derive(Serialize)]
+struct JsonResult {
+    name: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "cargo-avail",
     bin_name = "cargo avail",
+    version,
     about = "Check whether crate names are truly available on crates.io",
     after_help = "Checks name validity (character rules, length), reserved names \
                   (std, core, alloc, nul, com0, etc.), and the crates.io sparse index \
@@ -25,12 +35,16 @@ struct Cli {
     names: Vec<String>,
 
     /// Suppress output, exit code only
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "json")]
     quiet: bool,
 
     /// Only print available names
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "json")]
     available_only: bool,
+
+    /// Output results as NDJSON (one JSON object per line)
+    #[arg(long)]
+    json: bool,
 }
 
 /// Sanitize a string for tab-separated output: replace control chars with escape sequences.
@@ -125,13 +139,12 @@ fn main() -> ExitCode {
                 .collect();
             handles
                 .into_iter()
-                .map(|h| {
+                .zip(chunk)
+                .map(|(h, original_name)| {
                     h.join().unwrap_or_else(|_| {
                         (
-                            String::from("?"),
-                            Err(CheckError::IndexLookup(Box::new(ureq::Error::Io(
-                                io::Error::other("internal thread panic"),
-                            )))),
+                            original_name.clone(),
+                            Err(CheckError::Internal("thread panic".into())),
                         )
                     })
                 })
@@ -140,18 +153,23 @@ fn main() -> ExitCode {
         results.extend(chunk_results);
     }
 
-    let mut all_available = true;
+    let mut any_unavailable = false;
     let mut error_count: usize = 0;
 
     for (name, result) in &results {
         let is_available = matches!(result, Ok(Availability::Available));
-        let is_error = result.is_err();
+        // Network/internal errors mean we couldn't determine availability.
+        // InvalidName is deterministic -- the name is definitively unavailable.
+        let is_network_error = matches!(
+            result,
+            Err(CheckError::IndexLookup(_) | CheckError::Internal(_))
+        );
 
-        if !is_available {
-            all_available = false;
+        if !is_available && !is_network_error {
+            any_unavailable = true;
         }
 
-        if is_error {
+        if is_network_error {
             error_count += 1;
         }
 
@@ -159,9 +177,33 @@ fn main() -> ExitCode {
             continue;
         }
 
+        if cli.json {
+            let json_result = match result {
+                Ok(a) => JsonResult {
+                    name: name.clone(),
+                    status: a.to_string(),
+                    error: None,
+                },
+                Err(CheckError::InvalidName(e)) => JsonResult {
+                    name: name.clone(),
+                    status: "invalid".to_string(),
+                    error: Some(e.to_string()),
+                },
+                Err(e) => JsonResult {
+                    name: name.clone(),
+                    status: "error".to_string(),
+                    error: Some(e.to_string()),
+                },
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&json_result).expect("JSON serialization should not fail")
+            );
+            continue;
+        }
+
         // --available-only hides taken/reserved/invalid but always shows errors
-        // (errors mean we couldn't confirm availability -- user should know)
-        if cli.available_only && !is_available && !is_error {
+        if cli.available_only && !is_available && !is_network_error {
             continue;
         }
 
@@ -181,9 +223,11 @@ fn main() -> ExitCode {
         );
     }
 
-    if all_available {
-        ExitCode::SUCCESS
-    } else {
+    if error_count > 0 {
+        ExitCode::from(3)
+    } else if any_unavailable {
         ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
