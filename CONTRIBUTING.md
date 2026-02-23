@@ -26,7 +26,7 @@ cargo fmt --check
 ```
 src/
   lib.rs       # crate root, lint config
-  check.rs     # core checking logic (validation, reserved names, sparse index)
+  check.rs     # core checking logic (validation, reserved names, crates.io API)
   main.rs      # CLI, parallel checking, output formatting
 tests/
   api.rs       # public library API tests

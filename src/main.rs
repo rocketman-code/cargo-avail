@@ -24,7 +24,7 @@ struct JsonResult {
     version,
     about = "Check whether crate names are truly available on crates.io",
     after_help = "Checks name validity (character rules, length), reserved names \
-                  (std, core, alloc, nul, com0, etc.), and the crates.io sparse index \
+                  (std, core, alloc, nul, com0, etc.), and the crates.io API \
                   with canonical matching (hyphens and underscores are equivalent).\n\n\
                   Cannot detect recently deleted crates (requires DB access). \
                   A name passing all checks could still fail at publish time.",

@@ -4,7 +4,7 @@
 //!
 //! This library validates crate names against the real crates.io rules
 //! (vendored from the official `crates_io_validation` crate), checks them
-//! against the reserved names list, and queries the sparse index to determine
+//! against the reserved names list, and queries the crates.io API to determine
 //! availability -- including canonical collision detection where hyphens and
 //! underscores are equivalent.
 //!
