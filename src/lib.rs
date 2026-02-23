@@ -1,4 +1,4 @@
-#![warn(missing_docs, missing_debug_implementations)]
+#![warn(clippy::pedantic, missing_docs, missing_debug_implementations)]
 
 //! Check whether crate names are available on crates.io.
 //!
