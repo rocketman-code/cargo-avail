@@ -1,6 +1,7 @@
 # cargo-avail
 
 [![CI](https://github.com/rocketman-code/cargo-avail/actions/workflows/ci.yml/badge.svg)](https://github.com/rocketman-code/cargo-avail/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cargo-avail.svg)](https://crates.io/crates/cargo-avail)
 
 Check whether crate names are truly available on crates.io.
 
@@ -28,18 +29,18 @@ cargo install cargo-avail
 cargo avail my-crate another-name
 
 # Pipe names from stdin
-echo "my-crate\nanother-name" | cargo avail
+printf "my-crate\nanother-name\n" | cargo avail
 
 # Only show available names
-cargo avail --available-only name1 name2 name3
+cargo avail -a name1 name2 name3
 
-# Quiet mode: exit code only (0 = all available, 1 = any unavailable)
-cargo avail --quiet my-crate
+# Quiet mode: exit code only
+cargo avail -q my-crate
 
 # JSON output for scripting
 cargo avail --json my-crate another-name | jq '.status'
 
-# Check version
+# Print version
 cargo avail --version
 ```
 
@@ -84,7 +85,6 @@ match check_name(&client, "my-cool-crate") {
     Ok(Availability::Available) => println!("go grab it!"),
     Ok(status) => println!("{status}"),
     Err(e) => eprintln!("error: {e}"),
-    _ => {} // non_exhaustive
 }
 ```
 
