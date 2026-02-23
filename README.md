@@ -1,5 +1,7 @@
 # cargo-avail
 
+[![CI](https://github.com/rocketman-code/cargo-avail/actions/workflows/ci.yml/badge.svg)](https://github.com/rocketman-code/cargo-avail/actions/workflows/ci.yml)
+
 Check whether crate names are truly available on crates.io.
 
 Unlike simple "does this crate exist?" checkers, `cargo-avail` uses the
@@ -33,6 +35,12 @@ cargo avail --available-only name1 name2 name3
 
 # Quiet mode: exit code only (0 = all available, 1 = any unavailable)
 cargo avail --quiet my-crate
+
+# JSON output for scripting
+cargo avail --json my-crate another-name | jq '.status'
+
+# Check version
+cargo avail --version
 ```
 
 ## Output
@@ -46,13 +54,23 @@ std             reserved
 foo+bar         invalid: invalid character `+` in crate name: `foo+bar`, characters must be ASCII alphanumeric, `-`, or `_`
 ```
 
+With `--json`, one JSON object per line (NDJSON):
+
+```json
+{"name":"my-crate","status":"available"}
+{"name":"serde","status":"taken"}
+{"name":"std","status":"reserved"}
+{"name":"foo+bar","status":"invalid","error":"invalid character `+` in crate name: `foo+bar`, characters must be ASCII alphanumeric, `-`, or `_`"}
+```
+
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0    | All names are available |
-| 1    | One or more names are unavailable (taken, reserved, invalid, or error) |
+| 1    | One or more names are unavailable (taken, reserved, or invalid) |
 | 2    | Usage error (no names provided, stdin read failure) |
+| 3    | Partial failure: some names could not be checked (network error) |
 
 ## Library Usage
 
