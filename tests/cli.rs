@@ -178,17 +178,97 @@ fn version_flag_prints_version() {
 }
 
 #[test]
-fn hyphen_valued_names_accepted() {
-    // Names starting with hyphens should be accepted as arguments (invalid crate names,
-    // but should not be treated as flags)
+fn cargo_subcommand_strips_avail() {
+    // When cargo invokes `cargo-avail avail <args>`, the "avail" should be stripped.
+    // Simulate cargo's invocation by setting the CARGO env var, which cargo sets
+    // for external subcommands.
     let output = cargo_avail()
-        .arg("---test")
+        .env("CARGO", "cargo")
+        .args(["avail", "std"])
         .output()
         .expect("failed to execute");
-    // Should not fail with a clap error (exit code 2), but rather report invalid name
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should only have one result (std), not two (avail + std)
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1, "should strip 'avail' subcommand: {stdout}");
+    assert!(
+        stdout.contains("reserved"),
+        "should show std as reserved: {stdout}"
+    );
+}
+
+#[test]
+fn cargo_subcommand_flags_work() {
+    // Flags should work when invoked via cargo subcommand pattern.
+    // Simulate cargo's invocation by setting the CARGO env var.
+    let output = cargo_avail()
+        .env("CARGO", "cargo")
+        .args(["avail", "--version"])
+        .output()
+        .expect("failed to execute");
+    assert!(output.status.success(), "should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("invalid") || output.status.code() == Some(1),
-        "should handle hyphen-valued names: stdout={stdout}"
+        stdout.contains("cargo-avail"),
+        "should print version: {stdout}"
+    );
+}
+
+#[test]
+fn direct_invocation_treats_avail_as_crate_name() {
+    // When invoked directly (not via `cargo avail`), "avail" should be treated as
+    // a crate name to check, not stripped as a subcommand prefix.
+    // The CARGO env var is NOT set here, simulating direct invocation.
+    let output = cargo_avail()
+        .env_remove("CARGO")
+        .args(["avail", "std"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    // Should have two results: one for "avail" and one for "std"
+    assert_eq!(
+        lines.len(),
+        2,
+        "should treat 'avail' as a crate name in direct invocation: {stdout}"
+    );
+    assert!(
+        stdout.contains("avail"),
+        "should check the crate name 'avail': {stdout}"
+    );
+    assert!(
+        stdout.contains("std"),
+        "should also check 'std': {stdout}"
+    );
+}
+
+#[test]
+fn flags_work_after_positional_args() {
+    // --json after positional names should be recognized as a flag, not a crate name
+    let output = cargo_avail()
+        .args(["std", "--json"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("should be valid JSON");
+    assert_eq!(parsed["name"], "std");
+    assert_eq!(parsed["status"], "reserved");
+}
+
+#[test]
+fn hyphen_valued_names_via_separator() {
+    // Names starting with hyphens can be passed after `--` to prevent clap
+    // from treating them as flags
+    let output = cargo_avail()
+        .args(["--", "---test"])
+        .output()
+        .expect("failed to execute");
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("invalid"),
+        "should report invalid name: stdout={stdout}"
     );
 }

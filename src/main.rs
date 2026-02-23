@@ -27,8 +27,7 @@ struct JsonResult {
                   (std, core, alloc, nul, com0, etc.), and the crates.io API \
                   with canonical matching (hyphens and underscores are equivalent).\n\n\
                   Cannot detect recently deleted crates (requires DB access). \
-                  A name passing all checks could still fail at publish time.",
-    allow_hyphen_values = true
+                  A name passing all checks could still fail at publish time."
 )]
 struct Cli {
     /// Crate names to check (also reads from stdin)
@@ -76,16 +75,14 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    // Strip the subcommand name when invoked as `cargo avail`.
-    // Detect this by checking if argv[0] basename is "cargo" and argv[1] is "avail".
-    // When invoked directly as `cargo-avail avail`, argv[0] is "cargo-avail",
-    // so "avail" is a real crate name and should NOT be stripped.
+    // Strip the "avail" subcommand name when invoked via `cargo avail`.
+    // Cargo runs `cargo-avail avail <args...>`, inserting the subcommand name as argv[1].
+    // We detect this by checking the CARGO env var, which cargo sets for external subcommands.
+    // This avoids stripping "avail" when the user runs `cargo-avail avail` directly to check
+    // whether the crate name "avail" is available.
     let args: Vec<String> = std::env::args().collect();
-    let invoked_via_cargo = args.first().is_some_and(|a| {
-        let base = a.rsplit('/').next().unwrap_or(a);
-        base == "cargo"
-    });
-    let args = if invoked_via_cargo && args.len() > 1 && args[1] == "avail" {
+    let invoked_as_subcommand = std::env::var_os("CARGO").is_some();
+    let args = if invoked_as_subcommand && args.get(1).is_some_and(|a| a == "avail") {
         [&args[..1], &args[2..]].concat()
     } else {
         args
