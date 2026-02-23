@@ -5,6 +5,49 @@ fn cargo_avail() -> Command {
 }
 
 #[test]
+fn json_flag_outputs_ndjson() {
+    let output = cargo_avail()
+        .args(["--json", "std"])
+        .output()
+        .expect("failed to execute");
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("should be valid JSON");
+    assert_eq!(parsed["name"], "std");
+    assert_eq!(parsed["status"], "reserved");
+}
+
+#[test]
+fn json_flag_error_includes_error_field() {
+    let output = cargo_avail()
+        .args(["--json", "foo+bar"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("should be valid JSON");
+    assert_eq!(parsed["name"], "foo+bar");
+    assert_eq!(parsed["status"], "invalid");
+    assert!(parsed["error"].is_string(), "should have error field");
+}
+
+#[test]
+fn json_flag_multiple_names_outputs_ndjson_lines() {
+    let output = cargo_avail()
+        .args(["--json", "std", "core"])
+        .output()
+        .expect("failed to execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 2, "should have 2 NDJSON lines: {stdout}");
+    for line in &lines {
+        let _: serde_json::Value =
+            serde_json::from_str(line).expect("each line should be valid JSON");
+    }
+}
+
+#[test]
 fn no_args_exits_with_code_2() {
     let output = cargo_avail().output().expect("failed to execute");
     assert_eq!(output.status.code(), Some(2));
@@ -118,6 +161,20 @@ fn deduplicates_canonical_names() {
     // Should deduplicate to just one entry (the first occurrence)
     let foo_lines: Vec<&&str> = lines.iter().filter(|l| l.starts_with("foo")).collect();
     assert_eq!(foo_lines.len(), 1, "should deduplicate: {stdout}");
+}
+
+#[test]
+fn version_flag_prints_version() {
+    let output = cargo_avail()
+        .arg("--version")
+        .output()
+        .expect("failed to execute");
+    assert!(output.status.success(), "should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cargo-avail"),
+        "should contain crate name: {stdout}"
+    );
 }
 
 #[test]
