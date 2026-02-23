@@ -237,10 +237,7 @@ fn direct_invocation_treats_avail_as_crate_name() {
         stdout.contains("avail"),
         "should check the crate name 'avail': {stdout}"
     );
-    assert!(
-        stdout.contains("std"),
-        "should also check 'std': {stdout}"
-    );
+    assert!(stdout.contains("std"), "should also check 'std': {stdout}");
 }
 
 #[test]
