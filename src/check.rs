@@ -207,7 +207,7 @@ impl fmt::Display for Availability {
 pub enum CheckError {
     /// The crate name is syntactically invalid per crates.io rules.
     InvalidName(validation::InvalidCrateName),
-    /// A network or HTTP error prevented querying the sparse index.
+    /// A network or HTTP error prevented querying the crates.io API.
     IndexLookup(Box<ureq::Error>),
     /// An internal error (e.g., thread panic) that prevented checking.
     Internal(String),
@@ -239,7 +239,7 @@ impl From<validation::InvalidCrateName> for CheckError {
     }
 }
 
-/// An HTTP client configured for crates.io sparse index queries.
+/// An HTTP client configured for crates.io API queries.
 ///
 /// Wraps the underlying HTTP agent to insulate callers from the specific
 /// HTTP library version used internally.
@@ -262,6 +262,14 @@ impl Client {
     pub fn new() -> Self {
         let config = Agent::config_builder()
             .timeout_global(Some(REQUEST_TIMEOUT))
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION"),
+                " (",
+                env!("CARGO_PKG_REPOSITORY"),
+                ")"
+            ))
             .build();
         Self {
             agent: Agent::new_with_config(config),
@@ -288,30 +296,18 @@ pub fn canon_crate_name(name: &str) -> String {
     name.to_lowercase().replace('-', "_")
 }
 
-// Compute the sparse index path for a crate name.
-// Safe to use byte indexing: crate names are ASCII after validation/canonicalization.
-fn index_path(name: &str) -> String {
-    match name.len() {
-        0 => unreachable!("empty name should be caught by validation"),
-        1 => format!("1/{name}"),
-        2 => format!("2/{name}"),
-        3 => format!("3/{}/{name}", &name[..1]),
-        _ => format!("{}/{}/{name}", &name[..2], &name[2..4]),
-    }
-}
-
 /// Check whether a crate name is available on crates.io.
 ///
 /// Performs three checks in order:
 /// 1. Validates the name against crates.io naming rules.
 /// 2. Checks the name against the reserved names list.
-/// 3. Queries the crates.io sparse index for existing crates,
-///    including canonical variants (hyphen/underscore equivalence).
+/// 3. Queries the crates.io API, which uses the same canonical matching
+///    as `cargo publish` (hyphens and underscores are equivalent).
 ///
 /// # Errors
 ///
 /// Returns [`CheckError::InvalidName`] if the name fails crates.io validation,
-/// or [`CheckError::IndexLookup`] if the sparse index cannot be queried.
+/// or [`CheckError::IndexLookup`] if the API cannot be queried.
 ///
 /// # Example
 ///
@@ -336,43 +332,16 @@ pub fn check_name(client: &Client, name: &str) -> Result<Availability, CheckErro
         return Ok(Availability::Reserved);
     }
 
-    // 3. Sparse index lookup
-    // The index stores crates under their original published name (lowercased).
-    // Since crates.io enforces one crate per canonical name, we check:
-    //   - the user's lowercased input (catches exact matches)
-    //   - the all-underscores canonical form
-    //   - the all-hyphens variant
-    // This covers the vast majority of real crates. A theoretical gap exists for
-    // mixed-separator names like "my_cool-crate", but crates.io prevents publishing
-    // a name whose canonical form collides with an existing crate.
-    let lowered = name.to_lowercase();
-    let hyphen_variant = canonical.replace('_', "-");
-
-    let variants: [Option<&str>; 3] = [
-        Some(lowered.as_str()),
-        if canonical == lowered {
-            None
-        } else {
-            Some(canonical.as_str())
-        },
-        if hyphen_variant != lowered && hyphen_variant != canonical {
-            Some(hyphen_variant.as_str())
-        } else {
-            None
-        },
-    ];
-
-    for variant in variants.into_iter().flatten() {
-        let path = index_path(variant);
-        let url = format!("https://index.crates.io/{path}");
-        match client.agent.get(&url).call() {
-            Ok(_) => return Ok(Availability::Taken),
-            Err(ureq::Error::StatusCode(404)) => {}
-            Err(e) => return Err(CheckError::IndexLookup(Box::new(e))),
-        }
+    // 3. crates.io API lookup
+    // The API canonicalizes the name before querying (same logic as cargo publish),
+    // so one request covers ALL separator variants. No need to guess which spelling
+    // was used when the crate was published.
+    let url = format!("https://crates.io/api/v1/crates/{canonical}");
+    match client.agent.get(&url).call() {
+        Ok(_) => Ok(Availability::Taken),
+        Err(ureq::Error::StatusCode(404)) => Ok(Availability::Available),
+        Err(e) => Err(CheckError::IndexLookup(Box::new(e))),
     }
-
-    Ok(Availability::Available)
 }
 
 #[cfg(test)]
@@ -384,27 +353,6 @@ mod tests {
         assert_eq!(canon_crate_name("My-Crate"), "my_crate");
         assert_eq!(canon_crate_name("foo_bar"), "foo_bar");
         assert_eq!(canon_crate_name("FOO"), "foo");
-    }
-
-    #[test]
-    fn index_path_1_char() {
-        assert_eq!(index_path("a"), "1/a");
-    }
-
-    #[test]
-    fn index_path_2_char() {
-        assert_eq!(index_path("ab"), "2/ab");
-    }
-
-    #[test]
-    fn index_path_3_char() {
-        assert_eq!(index_path("abc"), "3/a/abc");
-    }
-
-    #[test]
-    fn index_path_4_plus_char() {
-        assert_eq!(index_path("serde"), "se/rd/serde");
-        assert_eq!(index_path("abcd"), "ab/cd/abcd");
     }
 
     #[test]
@@ -494,6 +442,19 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "requires network access"]
+    fn canonical_collision_via_api() {
+        // This test verifies that the crates.io API canonical matching works.
+        // `serde-json` is published as `serde_json` -- querying the canonical form
+        // via the API should still find it.
+        let client = Client::new();
+        match check_name(&client, "serde-json") {
+            Ok(Availability::Taken) => {}
+            other => panic!("expected Taken for API canonical match, got {other:?}"),
+        }
+    }
+
     // Auto-trait compile-time tests (RFR Ch.3 Listing 3-8)
     #[test]
     fn availability_is_send_sync_unpin() {
@@ -531,15 +492,6 @@ mod tests {
                 let canonical = canon_crate_name(&name);
                 prop_assert!(!canonical.contains('-'));
                 prop_assert_eq!(&canonical, &canonical.to_lowercase());
-            }
-
-            #[test]
-            fn valid_names_produce_valid_index_paths(name in "[a-zA-Z][a-zA-Z0-9_-]{0,63}") {
-                if validation::validate_crate_name(&name).is_ok() {
-                    let path = index_path(&canon_crate_name(&name));
-                    prop_assert!(!path.is_empty());
-                    prop_assert!(path.contains('/'));
-                }
             }
 
             #[test]

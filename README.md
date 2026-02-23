@@ -13,7 +13,7 @@ publish time:
   names like `nul`, `con`, `aux`, `com0`-`com9`, `lpt0`-`lpt9`)
 - Canonical collision detection (hyphens and underscores are equivalent:
   `foo-bar` and `foo_bar` are the same crate)
-- Sparse index lookup against `index.crates.io`
+- crates.io API lookup with canonical matching
 
 ## Install
 
@@ -93,8 +93,6 @@ match check_name(&client, "my-cool-crate") {
 - Cannot detect recently deleted crates (requires database access).
 - A name passing all checks could still fail at publish time due to
   server-side race conditions or policy changes.
-- Mixed-separator names (e.g., `my_cool-crate`) are checked via the three
-  most common variants, not all 2^n permutations.
 
 ## License
 
